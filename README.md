@@ -36,7 +36,23 @@ If one misbehaves on your Mac, try the other. They can be installed side by side
 
 ## Install the Live version
 
-Build it yourself (it takes a few seconds, and no film is needed). You need the Xcode command-line tools: type `xcode-select --install` in Terminal if you do not have them.
+### The easy way: download it
+
+1. Go to the **Releases** page of this repository and download `Scottish-Christmas-Live-Screensaver-2.0.0.zip` (a few hundred KB).
+2. Double-click the zip to unpack it. You will get a folder containing `Scottish Christmas Live.saver` and `install.sh`.
+3. Open **Terminal** (press Cmd+Space, type `Terminal`, press Return), type `cd ` (with a space after it), drag the unpacked folder onto the Terminal window, and press Return.
+4. Run the installer:
+
+   ```
+   ./install.sh live
+   ```
+
+   If macOS says the script is not allowed to run, type `chmod +x install.sh` and press Return, then run it again.
+5. Open **System Settings > Screen Saver**, scroll to **Scottish Christmas Live**, and click it. Choose how long the Mac should wait before it starts, and you are done.
+
+### Or build it yourself
+
+It takes a few seconds, and no film is needed. You need the Xcode command-line tools: type `xcode-select --install` in Terminal if you do not have them.
 
 ```
 git clone <this repository>
@@ -44,10 +60,6 @@ cd <the folder>
 ./build_live.sh     # builds "build/Scottish Christmas Live.saver" (Apple Silicon and Intel)
 ./install.sh live   # installs it for you
 ```
-
-Then open **System Settings > Screen Saver**, scroll to **Scottish Christmas Live**, and click it. Choose how long the Mac should wait before it starts, and you are done.
-
-(A ready-built download will be added to the **Releases** page when this version is merged into the main branch.)
 
 ## Install the Film version
 
