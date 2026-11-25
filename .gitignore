@@ -1,0 +1,6 @@
+# Built products and the rendered film are large and are rebuilt by the scripts (or shipped as a release download)
+build/
+video/
+dist/
+preview/
+.DS_Store
