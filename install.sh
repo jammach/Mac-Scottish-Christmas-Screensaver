@@ -1,11 +1,18 @@
 #!/bin/zsh
-# Installs the screensaver for the current user. Works from a built copy (build/) or from an unzipped download (next to this script).
+# Installs a screensaver for the current user.
+#   ./install.sh         installs "Scottish Christmas" (the film version)
+#   ./install.sh live    installs "Scottish Christmas Live" (drawn live, endless)
+# Works from a built copy (build/) or from an unzipped download (next to this script).
 set -e
 cd "${0:A:h}"
-NAME="Scottish Christmas"
-SRC="build/$NAME.saver"
-[[ -d "$SRC" ]] || SRC="$NAME.saver"
-[[ -d "$SRC" ]] || { echo "Could not find '$NAME.saver'. Build it with ./build.sh or unzip the download first."; exit 1; }
+case "${1:-film}" in
+  film) NAME="Scottish Christmas" ;;
+  live) NAME="Scottish Christmas Live" ;;
+  *) echo "Usage: ./install.sh [film|live]"; exit 1 ;;
+esac
+SRC="$NAME.saver"
+[[ -d "$SRC" ]] || SRC="build/$NAME.saver"
+[[ -d "$SRC" ]] || { echo "Could not find '$NAME.saver'. Build it first (./build.sh or ./build_live.sh), or unzip the download."; exit 1; }
 DEST="$HOME/Library/Screen Savers"
 mkdir -p "$DEST"
 rm -rf "$DEST/$NAME.saver"

@@ -33,7 +33,10 @@ func hashF(_ a: Int, _ b: Int = 0) -> F {
 func lerp(_ a: F, _ b: F, _ t: F) -> F { a + (b - a) * t }
 func clamp(_ x: F, _ a: F = 0, _ b: F = 1) -> F { min(max(x, a), b) }
 func smooth(_ e0: F, _ e1: F, _ x: F) -> F { let t = clamp((x - e0) / (e1 - e0)); return t * t * (3 - 2 * t) }
-func twinkle(_ t: Double, _ phase: F, _ rate: F = 2.0) -> F { pow(max(0, F(sin(t * Double(rate) + Double(phase)))), 6) }
+func twinkle(_ t: Double, _ phase: F, _ rate: F = 2.0) -> F {
+    if let b = Bake.current { return b.twinkleValue }
+    return pow(max(0, F(sin(t * Double(rate) + Double(phase)))), 6)
+}
 
 // MARK: - Colour
 
@@ -96,24 +99,140 @@ extension CGContext {
     /// Soft additive glow (lights, windows, magic).
     func glow(_ x: F, _ y: F, _ r: F, _ c: RGB, _ a: F) {
         guard a > 0.004, r > 1 else { return }
-        let g = CGGradient(colorsSpace: CGColorSpace(name: CGColorSpace.sRGB), colors: [c.cg(a), c.cg(a * 0.35), c.cg(0)] as CFArray, locations: [0, 0.35, 1])!
-        saveGState(); setBlendMode(.plusLighter)
-        drawRadialGradient(g, startCenter: CGPoint(x: x, y: y), startRadius: 0, endCenter: CGPoint(x: x, y: y), endRadius: r, options: [])
-        restoreGState()
+        Sprites.draw(self, Sprites.glowImage(c), x, y, r, a)
     }
-    /// Four-point twinkle star.
+    /// Four-point twinkle star. While baking, it is recorded so it can twinkle at run time instead of being painted in.
     func sparkle(_ x: F, _ y: F, _ r: F, _ c: RGB = Pal.snow, _ a: F = 1) {
         guard r > 0.6, a > 0.02 else { return }
-        let k = r * 0.16
+        if let b = Bake.current, b.record {
+            let d = b.design(self, x, y)
+            let h = hashF(Int(d.point.x * 7 + b.originX * 3), Int(d.point.y * 5))
+            b.emitters.append(Emitter(kind: .sparkle, x: d.point.x + b.originX, y: d.point.y, r: r * d.scale, c: c, a: a, phase: h * 6.283, rate: 1.2 + 1.6 * hashF(Int(d.point.x + b.originX), Int(d.point.y) + 3), base: 0, seed: 0, sc: d.scale))
+            return
+        }
+        Sprites.draw(self, Sprites.starImage(c), x, y, r * 1.5, a)
+    }
+    /// A string-light bulb glow that gently twinkles (recorded while baking).
+    func bulbGlow(_ x: F, _ y: F, _ r: F, _ c: RGB, _ aMax: F, phase: F, rate: F, base: F, t: Double) {
+        if let b = Bake.current, b.record {
+            let d = b.design(self, x, y)
+            b.emitters.append(Emitter(kind: .glow, x: d.point.x + b.originX, y: d.point.y, r: r * d.scale, c: c, a: aMax, phase: phase, rate: rate, base: base, seed: 0, sc: d.scale))
+            return
+        }
+        glow(x, y, r, c, aMax * (base + (1 - base) * twinkle(t, phase, rate)))
+    }
+}
+
+// MARK: - Baking support: things that move or twinkle are recorded while the scenery is cached, then drawn live
+
+struct Emitter {
+    enum Kind: UInt8 { case sparkle, glow, smoke }
+    var kind: Kind
+    var x: F          // layer-space x (world x for the front layer); y is in design units
+    var y: F
+    var r: F          // size (for smoke: strength)
+    var c: RGB
+    var a: F
+    var phase: F
+    var rate: F
+    var base: F
+    var seed: Int
+    var sc: F = 1     // size of the drawing it came from (distant things are drawn smaller)
+}
+
+final class BakeState {
+    var emitters: [Emitter] = []
+    var originX: F = 0
+    var record = true
+    var twinkleValue: F = 1
+    var baseInverse = CGAffineTransform.identity   // device pixels back to design units, as set up at the start of the bake
+
+    /// Where a point drawn in the current (possibly scaled and shifted) coordinates really lands in the tile, and how much it is scaled.
+    func design(_ c: CGContext, _ x: F, _ y: F) -> (point: CGPoint, scale: F) {
+        let m = c.ctm.concatenating(baseInverse)
+        return (CGPoint(x: x, y: y).applying(m), (m.a * m.a + m.b * m.b).squareRoot())
+    }
+}
+
+enum Bake {
+    private static let lock = NSLock()
+    nonisolated(unsafe) private static var activeCount = 0
+    /// The bake in progress on this thread, if any (a cheap global check first, so live drawing pays almost nothing).
+    static var current: BakeState? {
+        guard activeCount > 0 else { return nil }
+        return Thread.current.threadDictionary["bake"] as? BakeState
+    }
+    static func begin(_ s: BakeState) {
+        lock.lock(); activeCount += 1; lock.unlock()
+        Thread.current.threadDictionary["bake"] = s
+    }
+    static func end() {
+        Thread.current.threadDictionary.removeObject(forKey: "bake")
+        lock.lock(); activeCount -= 1; lock.unlock()
+    }
+}
+
+/// Pre-rendered glow and star images, one per colour, drawn with additive blending. Far cheaper than building gradients every time.
+enum Sprites {
+    private static let lock = NSLock()
+    nonisolated(unsafe) private static var stars: [UInt32: CGImage] = [:]
+    nonisolated(unsafe) private static var glows: [UInt32: CGImage] = [:]
+
+    private static func key(_ c: RGB) -> UInt32 {
+        func q(_ v: F) -> UInt32 { UInt32(clamp(v) * 31 + 0.5) }
+        return q(c.r) << 10 | q(c.g) << 5 | q(c.b)
+    }
+    /// The colour space pictures are drawn in. The live saver sets this to the display's own, so nothing needs converting on the way to the screen.
+    nonisolated(unsafe) static var space = CGColorSpace(name: CGColorSpace.sRGB)!
+    static func use(space s: CGColorSpace) {
+        lock.lock(); space = s; stars.removeAll(); glows.removeAll(); lock.unlock()
+    }
+    private static func canvas(_ n: Int) -> CGContext {
+        CGContext(data: nil, width: n, height: n, bitsPerComponent: 8, bytesPerRow: 0, space: space,
+                  bitmapInfo: CGImageAlphaInfo.premultipliedFirst.rawValue | CGBitmapInfo.byteOrder32Little.rawValue)!
+    }
+    private static func radial(_ ctx: CGContext, _ c: RGB, _ peak: F, _ r: F) {
+        let g = CGGradient(colorsSpace: CGColorSpace(name: CGColorSpace.sRGB), colors: [c.cg(peak), c.cg(peak * 0.35), c.cg(0)] as CFArray, locations: [0, 0.35, 1])!
+        ctx.drawRadialGradient(g, startCenter: CGPoint(x: r, y: r), startRadius: 0, endCenter: CGPoint(x: r, y: r), endRadius: r, options: [])
+    }
+
+    static func glowImage(_ c: RGB) -> CGImage {
+        let k = key(c)
+        lock.lock(); defer { lock.unlock() }
+        if let i = glows[k] { return i }
+        let ctx = canvas(128)
+        radial(ctx, c, 1, 64)
+        let img = ctx.makeImage()!
+        glows[k] = img
+        return img
+    }
+
+    /// A unit star: points reach 1/1.5 of the half-size, with a soft halo out to the edge.
+    static func starImage(_ c: RGB) -> CGImage {
+        let k = key(c)
+        lock.lock(); defer { lock.unlock() }
+        if let i = stars[k] { return i }
+        let ctx = canvas(128)
+        radial(ctx, c, 0.5, 64)
+        let h: F = 64, r = h / 1.5, kk = r * 0.16
         let p = CGMutablePath()
-        p.move(to: CGPoint(x: x, y: y - r))
-        p.addQuadCurve(to: CGPoint(x: x + r, y: y), control: CGPoint(x: x + k, y: y - k))
-        p.addQuadCurve(to: CGPoint(x: x, y: y + r), control: CGPoint(x: x + k, y: y + k))
-        p.addQuadCurve(to: CGPoint(x: x - r, y: y), control: CGPoint(x: x - k, y: y + k))
-        p.addQuadCurve(to: CGPoint(x: x, y: y - r), control: CGPoint(x: x - k, y: y - k))
-        saveGState(); setBlendMode(.plusLighter); setFillColor(c.cg(a)); addPath(p); fillPath()
-        restoreGState()
-        glow(x, y, r * 1.5, c, a * 0.5)
+        p.move(to: CGPoint(x: h, y: h - r))
+        p.addQuadCurve(to: CGPoint(x: h + r, y: h), control: CGPoint(x: h + kk, y: h - kk))
+        p.addQuadCurve(to: CGPoint(x: h, y: h + r), control: CGPoint(x: h + kk, y: h + kk))
+        p.addQuadCurve(to: CGPoint(x: h - r, y: h), control: CGPoint(x: h - kk, y: h + kk))
+        p.addQuadCurve(to: CGPoint(x: h, y: h - r), control: CGPoint(x: h - kk, y: h - kk))
+        ctx.setFillColor(c.cg(1)); ctx.addPath(p); ctx.fillPath()
+        let img = ctx.makeImage()!
+        stars[k] = img
+        return img
+    }
+
+    /// Both sprites are symmetrical, so the flipped coordinate system used for drawing does not matter.
+    static func draw(_ ctx: CGContext, _ img: CGImage, _ x: F, _ y: F, _ half: F, _ alpha: F) {
+        ctx.saveGState()
+        ctx.setBlendMode(.plusLighter); ctx.setAlpha(min(alpha, 1))
+        ctx.draw(img, in: CGRect(x: x - half, y: y - half, width: 2 * half, height: 2 * half))
+        ctx.restoreGState()
     }
 }
 

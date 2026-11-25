@@ -255,11 +255,14 @@ final class ChristmasScene {
     static let fall = 1.25
     let visits: [(F, F, F, F)]
 
-    init(journeys: Int = 3) {
+    convenience init(journeys n: Int = 3) { self.init(journeys: 0..<n) }
+
+    /// Builds the world for a run of journeys (each one is generated from its own seed, so any window of the endless world is reproducible).
+    init(journeys range: Range<Int>) {
         var allItems: [Item] = [], allMid: [MidItem] = []
         var vs: [(F, F, F, F)] = []
         let tc = Geo.C / 150
-        for k in 0..<journeys {
+        for k in range {
             let o = F(k) * Geo.C
             var b = WorldBuilder(seed: 20261125 + k * 7919)
             b.terrace(o - 560, o + Geo.b1 + 200, lights: 0.4, cottages: 0.12)
@@ -282,7 +285,6 @@ final class ChristmasScene {
         mid = allMid
         visits = vs
         // schedule presents for every pot Santa can reach while he hovers
-        var rng = RNG(99)
         var ds: [Drop] = []
         let x0 = ChristmasScene.holdX - 60
         for it in allItems {
@@ -293,7 +295,9 @@ final class ChristmasScene {
                     let tL = Double(wxPot - x0) / Double(150)
                     let tD = tL - ChristmasScene.fall
                     for v in vs where tD >= Double(v.1) + 0.3 && tD <= Double(v.2) - 0.2 {
-                        ds.append(Drop(tDrop: tD, tLand: tL, wxPot: wxPot, rimY: ch.rimY, size: rng.r(52, 74), paper: rng.pick(Pal.presentPapers), ribbon: rng.chance(0.5) ? Pal.gold : Pal.silver, pattern: rng.i(4), seed: rng.i(999)))
+                        // everything about a present comes from where its chimney is, so it looks the same whichever window of the world builds it
+                        let pk = Int(wxPot.rounded())
+                        ds.append(Drop(tDrop: tD, tLand: tL, wxPot: wxPot, rimY: ch.rimY, size: 52 + 22 * hashF(pk, 11), paper: Pal.presentPapers[Int(hashF(pk, 12) * 8) % 8], ribbon: hashF(pk, 13) < 0.5 ? Pal.gold : Pal.silver, pattern: Int(hashF(pk, 14) * 4) % 4, seed: Int(hashF(pk, 15) * 999)))
                     }
                 }
             }
@@ -378,9 +382,65 @@ final class ChristmasScene {
         }
     }
 
-    func hillLine(_ c: CGContext, par: F, cam: F, W: F, base: F, amp: F, mountains: F, fill: [(RGB, F)], top: RGB, seed: F) -> (F) -> F {
+    // MARK: Live-render pieces of the sky
+
+    static let skyStops: [(RGB, F)] = [(RGB(0x090D38), 0), (RGB(0x1B2874), 0.3), (RGB(0x4A3B98), 0.58), (RGB(0xB05AA2), 0.8), (RGB(0xF2A3A0), 1.0)]
+
+    /// The unchanging sky: gradient, star dots and the moon.
+    func drawSkyBase(_ c: CGContext, W: F) {
+        c.vgrad(CGRect(x: 0, y: 0, width: W, height: 1080), Self.skyStops)
+        for i in 0..<170 {
+            let sx = hashF(i, 1) * (W + 200) - 100
+            let y = hashF(i, 2) * 620
+            c.circle(sx, y, 0.9 + 1.6 * hashF(i, 6), RGB(0xFFFFFF).cg((0.35 + 0.65 * hashF(i, 5)) * 0.85))
+        }
+        let mx = W * 0.77, my: F = 210
+        c.glow(mx, my, 420, RGB(0xFFF1C8), 0.38)
+        c.circle(mx, my, 78, RGB(0xFFF7DC).cg()); c.circle(mx - 22, my + 14, 17, RGB(0xF0E1B8).cg()); c.circle(mx + 26, my - 22, 11, RGB(0xF0E1B8).cg()); c.circle(mx + 14, my + 34, 8, RGB(0xF0E1B8).cg())
+        c.circle(mx + 12, my - 8, 66, RGB(0xFFFFFF).cg(0.12))
+    }
+
+    /// The bigger stars that twinkle.
+    func drawSkyTwinkles(_ c: CGContext, t: Double, W: F) {
+        for i in stride(from: 0, to: 170, by: 9) {
+            let sx = hashF(i, 1) * (W + 200) - 100
+            let y = hashF(i, 2) * 620
+            let tw = twinkle(t, hashF(i, 3) * 6.28, 0.8 + hashF(i, 4) * 1.8)
+            if tw > 0.04 { c.sparkle(sx, y, 6 + 10 * tw, i % 2 == 0 ? RGB(0xFFF1B8) : RGB(0xCFE6FF), 0.4 + tw * 0.6) }
+        }
+    }
+
+    static let cloudCount = 7
+    /// Cloud i drawn around its own centre; returns the picture's bounds in design units relative to that centre.
+    static func cloudBounds(_ i: Int) -> CGRect {
+        let s = 0.8 + hashF(i, 43) * 0.8
+        return CGRect(x: -175 * s, y: -52 * s, width: 350 * s, height: 104 * s)
+    }
+    func drawCloud(_ c: CGContext, _ i: Int) {
+        let s = 0.8 + hashF(i, 43) * 0.8
+        for (dx, dy, rx, ry) in [(-70.0, 8.0, 70.0, 24.0), (0, -6, 90, 32), (70, 6, 74, 26), (20, 16, 100, 22)] as [(F, F, F, F)] {
+            c.ellipse(dx * s, dy * s, rx * s, ry * s, RGB(0x7B62BC).cg(0.5))
+            c.ellipse(dx * s, (dy - 8) * s, rx * s * 0.85, ry * s * 0.7, RGB(0xC98BD0).cg(0.28))
+        }
+    }
+    /// Where cloud i sits (design units, centre) for a given time and camera.
+    func cloudPosition(_ i: Int, t: Double, cam: F, W: F) -> CGPoint {
+        let cx = (hashF(i, 40) * (W + 700) - cam * 0.03 - F(t) * (6 + 3 * hashF(i, 41))).truncatingRemainder(dividingBy: W + 700)
+        return CGPoint(x: (cx < 0 ? cx + W + 700 : cx) - 350, y: 120 + hashF(i, 42) * 330)
+    }
+
+    // MARK: Hills, anchored by layer position u (so any tile of the world can be drawn on its own)
+
+    /// How mountainous the far hills are at layer position u: Highlands in the Scottish stretch of every journey.
+    func mountainWeight(_ u: F) -> F {
+        let lc = Geo.local((u - 960) / 0.08)
+        return smooth(7600, 9000, lc) * (1 - smooth(12500, 13400, lc))
+    }
+
+    func hillLine(_ c: CGContext, u0: F, W: F, base: F, amp: F, mountains: @escaping (F) -> F, fill: [(RGB, F)], top: RGB, seed: F) -> (F) -> F {
         func h(_ sx: F) -> F {
-            let wx = (sx + cam * par) + seed
+            let wx = (sx + u0) + seed
+            let mountains = mountains(sx + u0)
             let smoothH = 0.55 * F(sin(Double(wx) / 330)) + 0.3 * F(sin(Double(wx) / 140 + 1.2)) + 0.15 * F(sin(Double(wx) / 61))
             let ridge = 1 - abs(F(sin(Double(wx) / 190)) + 0.6 * F(sin(Double(wx) / 83 + 1.3)) + 0.3 * F(sin(Double(wx) / 37))) / 1.9
             return base - amp * (smoothH * (1 - mountains) + (ridge * 2.0 - 0.6) * mountains)
@@ -398,13 +458,18 @@ final class ChristmasScene {
     }
 
     func drawFarHills(_ c: CGContext, t: Double, cam: F, W: F) {
-        let lc = Geo.local(cam)
-        let mtn = smooth(7600, 9000, lc) * (1 - smooth(12500, 13400, lc))
-        let h = hillLine(c, par: 0.08, cam: cam, W: W, base: 660, amp: 120, mountains: mtn, fill: [(RGB(0x8E86D4), 0), (RGB(0x6D63B9), 1)], top: RGB(0xE8E4FF), seed: 0)
-        // Highland castle glimmering on a far crag
-        if mtn > 0.3 {
-            let cx = 1500 - (lc - 8000) * 0.08
-            if cx > -200 && cx < W + 200 {
+        drawFarHillsTile(c, u0: cam * 0.08, W: W)
+    }
+
+    func drawFarHillsTile(_ c: CGContext, u0: F, W: F) {
+        let h = hillLine(c, u0: u0, W: W, base: 660, amp: 120, mountains: { self.mountainWeight($0) }, fill: [(RGB(0x8E86D4), 0), (RGB(0x6D63B9), 1)], top: RGB(0xE8E4FF), seed: 0)
+        // Highland castle glimmering on a far crag, once in every journey
+        let k0 = Int(((u0 - 960) / 0.08 - Geo.origin) / Geo.C)
+        for k in (k0 - 1)...(k0 + 1) {
+            let uc = 1760 + 0.08 * F(k) * Geo.C
+            let mtn = mountainWeight(uc)
+            let cx = uc - u0
+            if mtn > 0.3 && cx > -200 && cx < W + 200 {
                 let by = h(cx) + 6
                 c.rrect(CGRect(x: cx - 46, y: by - 62, width: 92, height: 66), 2, RGB(0x4C4A9C).cg(mtn))
                 for dx in [-44.0, 0.0, 44.0] as [F] { c.rrect(CGRect(x: cx + dx - 11, y: by - 98, width: 22, height: 40), 2, RGB(0x4C4A9C).cg(mtn)); c.poly([CGPoint(x: cx + dx - 14, y: by - 98), CGPoint(x: cx + dx, y: by - 120), CGPoint(x: cx + dx + 14, y: by - 98)], RGB(0x3A3880).cg(mtn)) }
@@ -413,14 +478,15 @@ final class ChristmasScene {
         }
     }
 
-    func drawMidHillsFront(_ c: CGContext, cam: F, W: F) {
+    func drawMidHillsFront(_ c: CGContext, cam: F, W: F) { drawMidHillsTile(c, u0: cam * 0.22, W: W) }
+
+    func drawMidHillsTile(_ c: CGContext, u0: F, W: F) {
         // low rolling hills with a far line of little trees and the odd lit cottage
-        let par: F = 0.22
-        let h = hillLine(c, par: par, cam: cam, W: W, base: 770, amp: 52, mountains: 0, fill: [(RGB(0xA9A3EA), 0), (RGB(0x7C74CE), 1)], top: RGB(0xF3F1FF), seed: 400)
-        var x = (-(cam * par).truncatingRemainder(dividingBy: 34)) - 34
+        let h = hillLine(c, u0: u0, W: W, base: 770, amp: 52, mountains: { _ in 0 }, fill: [(RGB(0xA9A3EA), 0), (RGB(0x7C74CE), 1)], top: RGB(0xF3F1FF), seed: 400)
+        var x = ((u0 - 40) / 34).rounded(.down) * 34 - u0
         while x < W + 40 {
-            let id = Int(((x + cam * par) / 34).rounded())
-            let w = Geo.weights(cam + x)
+            let id = Int(((x + u0) / 34).rounded())
+            let w = Geo.weights((x + u0 - 960) / 0.22 + 960)
             let r = hashF(id, 77)
             if r < 0.5 + 0.3 * w.forest {
                 drawFarTree(c, x: x + hashF(id, 78) * 18, base: h(x) + 8, h: 26 + 26 * hashF(id, 79), col: RGB(0x2D3C8C).cg(0.85), snow: RGB(0xE9E8FF).cg(0.9))
@@ -435,18 +501,19 @@ final class ChristmasScene {
         }
     }
 
-    func drawMidRow(_ c: CGContext, t: Double, cam: F, W: F) {
-        let par: F = 0.55
+    func drawMidRow(_ c: CGContext, t: Double, cam: F, W: F) { drawMidRowTile(c, t: t, u0: cam * 0.55, W: W) }
+
+    func drawMidRowTile(_ c: CGContext, t: Double, u0: F, W: F) {
         c.beginTransparencyLayer(auxiliaryInfo: nil)
         let groundMid: F = 800
         // a snowy ridge behind the row so its feet are hidden
         var pts: [CGPoint] = []
         var x: F = -10
-        while x <= W + 10 { let wx = x + cam * par; pts.append(CGPoint(x: x, y: groundMid + 6 * F(sin(Double(wx) / 120)))); x += 10 }
+        while x <= W + 10 { let wx = x + u0; pts.append(CGPoint(x: x, y: groundMid + 6 * F(sin(Double(wx) / 120)))); x += 10 }
         c.move(to: CGPoint(x: -10, y: 1100)); for p in pts { c.addLine(to: p) }; c.addLine(to: CGPoint(x: W + 10, y: 1100)); c.closePath()
         c.setFillColor(Pal.snowMid.cg()); c.fillPath()
         for m in mid {
-            let sx = m.mx - cam * par
+            let sx = m.mx - u0
             if sx < -400 || sx > W + 400 { continue }
             let gy = groundMid + 6 * F(sin(Double(m.mx) / 120))
             c.saveGState(); c.translateBy(x: sx, y: gy); c.scaleBy(x: m.s, y: m.s)
@@ -462,7 +529,7 @@ final class ChristmasScene {
         c.endTransparencyLayer()
     }
 
-    func drawSantaLayer(_ c: CGContext, t: Double, cam: F, W: F) {
+    func drawSantaLayer(_ c: CGContext, t: Double, cam: F, W: F, halo: Bool = true) {
         guard let pose = santaPose(t, width: W) else { return }
         let S = ChristmasScene.santaScale
         // dust trail follows the sleigh in the world (so it streams behind as the camera moves on)
@@ -470,7 +537,7 @@ final class ChristmasScene {
             guard let p = self.santaPose(te, width: W) else { return nil }
             return CGPoint(x: p.x - 70 * S, y: p.y - 10)
         }, cam: { self.cam($0) })
-        c.glow(pose.x + 250, pose.y, 640, RGB(0xFFD9A0), 0.16)
+        if halo { c.glow(pose.x + 250, pose.y, 640, RGB(0xFFD9A0), 0.16) }
         drawSantaTeam(c, x: pose.x, y: pose.y, tilt: pose.tilt, s: S, t: t)
         // presents in flight
         for d in drops where t >= d.tDrop && t <= d.tLand + 0.3 {
@@ -520,8 +587,8 @@ final class ChristmasScene {
             switch it.thing {
             case .house(let h): drawHouse(c, h, x: sx, t: t)
             case .tree(let tr): drawTree(c, tr, x: sx, t: t)
-            case .sheep(let s): drawSheep(c, x: sx, y: g + 8, s: s, t: t, seed: it.seed)
-            case .snowman: drawSnowman(c, x: sx, y: g + 6, s: 1.0, t: t)
+            case .sheep(let s): if Bake.current == nil { drawSheep(c, x: sx, y: g + 8, s: s, t: t, seed: it.seed) }
+            case .snowman: if Bake.current == nil { drawSnowman(c, x: sx, y: g + 6, s: 1.0, t: t) }
             case .fence(let l): drawFence(c, x: sx - l / 2, y: g + 6, len: l, t: t, seed: it.seed)
             case .wall(let l): drawWall(c, x: sx - l / 2, y: g + 6, len: l, t: t, seed: it.seed)
             case .hedge(let l): drawHedge(c, x: sx - l / 2, y: g + 8, len: l, t: t, seed: it.seed)
@@ -529,6 +596,20 @@ final class ChristmasScene {
             case .lamp: drawLamp(c, x: sx, y: g + 6, t: t)
             case .pond(let w): drawPond(c, x: sx, y: g + 16, w: w, t: t)
             case .barn: drawBarn(c, x: sx, base: g + 10, t: t)
+            }
+        }
+    }
+
+    /// Sheep and the snowman move a little (grazing, a fluttering scarf), so they are drawn live rather than cached.
+    func drawFrontDynamic(_ c: CGContext, t: Double, cam: F, W: F) {
+        for it in items {
+            let sx = it.wx - cam
+            if sx + it.ext < -80 || sx - it.ext > W + 80 { continue }
+            let g = (it.y ?? (Geo.groundY(it.wx) + 6)) - 6
+            switch it.thing {
+            case .sheep(let s): drawSheep(c, x: sx, y: g + 8, s: s, t: t, seed: it.seed)
+            case .snowman: drawSnowman(c, x: sx, y: g + 6, s: 1.0, t: t)
+            default: break
             }
         }
     }
