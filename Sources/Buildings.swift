@@ -44,7 +44,7 @@ func drawWindow(_ c: CGContext, _ r: CGRect, style: Int, t: Double, seed: Int) {
         let cols = [RGB(0xFF4D6D), RGB(0x4CC9F0), RGB(0xFFD23F), RGB(0xB5E48C)]
         for k in 0..<7 {
             let fy = F(k) / 6, bx = cx + (hashF(seed, k) - 0.5) * tw * fy * 1.5, by = bot - th * 0.12 - fy * th * 0.7
-            c.circle(bx, by, 2.6, cols[k % 4].cg()); c.glow(bx, by, 11, cols[k % 4], 0.6 * (0.5 + 0.5 * twinkle(t, F(k + seed), 2.4)))
+            c.circle(bx, by, 2.6, cols[k % 4].cg()); c.bulbGlow(bx, by, 11, cols[k % 4], 0.6, phase: F(k + seed), rate: 2.4, base: 0.5, t: t)
         }
         c.sparkle(cx, bot - th, 8, Pal.gold, 1)
     case 2: // curtains
@@ -99,6 +99,11 @@ func drawAerial(_ c: CGContext, x: F, y: F, t: Double, seed: Int) {
 }
 
 func drawSmoke(_ c: CGContext, x: F, y: F, t: Double, seed: Int, strength: F = 1) {
+    if let b = Bake.current, b.record {
+        let d = b.design(c, x, y)
+        b.emitters.append(Emitter(kind: .smoke, x: d.point.x + b.originX, y: d.point.y, r: strength, c: Pal.snow, a: 1, phase: 0, rate: 0, base: 0, seed: seed, sc: d.scale))
+        return
+    }
     for k in 0..<7 {
         let age = (t * 0.22 + F(k) / 7 + hashF(seed, 3) * 3).truncatingRemainder(dividingBy: 1)
         let px = x + age * 70 + F(sin(age * 7 + F(seed))) * 8
@@ -217,8 +222,7 @@ func drawHouse(_ c: CGContext, _ h: House, x: F, t: Double) {
                 let u = F(b) / 4
                 let bx = lerp(x0, x1, u), by = h.eaveY + 6 + 4 * u * (1 - u) * 15 * 2 * 0.5 + (u * (1 - u)) * 60 * 0.5
                 let col = cols[(s * 3 + b + h.seed) % 5]
-                let tw = 0.45 + 0.55 * twinkle(t, F(s * 3 + b + h.seed), 2.0 + hashF(h.seed, s + b))
-                c.circle(bx, by + 4, 4.2, col.cg()); c.glow(bx, by + 4, 26, col, 0.7 * tw)
+                c.circle(bx, by + 4, 4.2, col.cg()); c.bulbGlow(bx, by + 4, 26, col, 0.7, phase: F(s * 3 + b + h.seed), rate: 2.0 + hashF(h.seed, s + b), base: 0.45, t: t)
             }
         }
     }

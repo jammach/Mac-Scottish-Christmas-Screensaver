@@ -1,4 +1,4 @@
-# Mac Scottish Christmas Screensaver — progress (saved 2026-11-25)
+# Mac Scottish Christmas Screensaver — progress (saved 2026-11-25, updated for the live version)
 
 **What it is:** a Christmas screensaver for the Mac in the style of a children's animation: a fixed camera flying over snowy UK rooftops and
 treetops (English terraces, countryside, forest canopy, Scottish village, town), with Santa's sleigh dropping presents down the chimneys.
@@ -28,3 +28,18 @@ treetops (English terraces, countryside, forest canopy, Scottish village, town),
 - A live-rendered endless version (would need baked scrolling tiles to reach 30 fps; the film approach avoids that).
 - A longer film or a Welsh valley / coastal scene; optional quiet music.
 - A Developer ID signature and notarisation, so downloads need no quarantine step.
+
+## Live version (branch `live-version`, version 2.0.0)
+- **What:** `Scottish Christmas Live.saver`, drawn live and endless (each journey of 112 s is built from its own seed). Same artwork as the film.
+- **How it stays fast:** scenery (hills, mid-row, houses, trees, ground) is baked into 1024-unit tiles on a background thread; each frame only draws what
+  moves (snow, smoke, twinkles, Santa, presents) into two transparent overlay pictures; Core Animation layers composite and scroll everything on the GPU.
+  Twinkles, string-light glows and smoke are recorded while baking (`Emitter`) and replayed live. Santa's halo is a GPU layer.
+- **Measured (M2 Max, test host, 1080-1440p):** live frame 3-5 ms (3-14 ms with Santa) on one thread; steady 30.0 frames/s with 0 late frames over 450;
+  30-50% of one core; ~172 MB resident; first screen of scenery baked in ~0.2 s; no memory growth over repeated stop/start.
+  Frames are paced by a display link; colour space follows the display so Core Animation does no per-frame conversion.
+- **Fixes found on the way:** per-frame colour conversion on the main thread (cost 30% CPU) fixed by drawing in the display's colour space;
+  memory held per stop/start fixed by clearing layer contents in `tearDown`; timer jitter fixed by a display link.
+- **Not tested:** inside macOS's real screensaver host on a live display, and multi-display behaviour. First thing to check after installing.
+- **Differences from the film:** far hills/mountains and the Highland castle are anchored to the landscape (they slide past) instead of morphing;
+  sheep and the snowman are drawn live; presents are coloured from their chimney's position; the moon and stars no longer drift.
+- **Commands:** `./build_live.sh`, `./install.sh live`, `./uninstall.sh live`, `./package.sh live 2.0.0`; tests: `./build_livetest.sh` then `build/livetest still|bench|santa`.

@@ -51,8 +51,7 @@ private func drawSpruce(_ c: CGContext, _ tr: Tree, _ x: F, _ t: Double) {
             for k in 0..<m {
                 let bx = x - hw + (F(k) + 0.5) * bump, by = yBot - 4
                 let col = cols[(k + i) % 4]
-                let tw = 0.55 + 0.45 * twinkle(t, F(k * 2 + i), 2.2)
-                c.circle(bx, by, 4.5, col.cg()); c.glow(bx, by, 22, col, 0.55 * tw)
+                c.circle(bx, by, 4.5, col.cg()); c.bulbGlow(bx, by, 22, col, 0.55, phase: F(k * 2 + i), rate: 2.2, base: 0.55, t: t)
             }
         }
     }
