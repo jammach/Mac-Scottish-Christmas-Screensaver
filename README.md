@@ -145,4 +145,6 @@ Everything is generated from fixed random seeds, so the same journey always look
 
 ## Licence and credits
 
-Drawn and generated with Claude. No licence has been chosen yet, so all rights are reserved until one is added.
+Released under the [MIT Licence](LICENSE): you are free to use, change and share it, including the artwork and code, as long as the licence notice stays with it.
+
+Drawn and generated with Claude.
